@@ -1,17 +1,17 @@
-name: دانلود، تقسیم و آپلود خودکار فایل بزرگ
+name: "دانلود، تقسیم و آپلود خودکار فایل (AxionOS)"
 
 on:
   workflow_dispatch:
     inputs:
       file_url:
-        description: 'لینک مستقیم فایل برای دانلود'
+        description: 'لینک مستقیم فایل'
         required: true
-        default: 'https://example.com/largefile.zip'
+        default: 'https://cdn.axionos.org/begonia/axion-2.6-QUASIS-20260521-OFFICIAL-PICO-begonia.zip'
         type: string
       part_size:
-        description: 'اندازه هر قطعه (مثلا 90M یا 100M)'
+        description: 'اندازه هر قطعه (مثلاً 95M)'
         required: false
-        default: '90M'
+        default: '95M'
         type: string
 
 jobs:
@@ -22,46 +22,36 @@ jobs:
 
     steps:
       - name: آماده‌سازی محیط
-        run: |
-          echo "شروع کار"
-          df -h .
+        run: echo "شروع دانلود..."
 
-      - name: دریافت فایل از لینک مستقیم
+      - name: دریافت فایل با هدرهای شبیه‌سازی مرورگر
         run: |
           echo "دانلود از: ${{ github.event.inputs.file_url }}"
-          curl -L -o "original_file.bin" "${{ github.event.inputs.file_url }}"
-          echo "دانلود تمام شد"
+          curl -L -o "original_file.bin" "${{ github.event.inputs.file_url }}" \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            -H "Referer: https://axionos.org/" \
+            -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8" \
+            -H "Accept-Language: en-US,en;q=0.5" \
+            --retry 5 --retry-delay 3 --max-time 1800
+          echo "دانلود کامل شد."
           ls -lh original_file.bin
 
       - name: تقسیم فایل به قطعات
         run: |
-          echo "تقسیم فایل به قطعات ${{ github.event.inputs.part_size }}"
-          split -b ${{ github.event.inputs.part_size }} original_file.bin "part_"
-          echo "تقسیم انجام شد"
-          ls -lh part_*
+          echo "تقسیم فایل به قطعات ${{ github.event.inputs.part_size }}..."
+          split -b ${{ github.event.inputs.part_size }} -d -a 3 original_file.bin "part_"
+          echo "تقسیم انجام شد. تعداد قطعات: $(ls part_* | wc -l)"
 
-      - name: ایجاد Release جدید
-        id: create_release
+      - name: آپلود قطعات به Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "upload-${{ github.run_id }}"
-          name: "آپلود خودکار - ${{ github.run_id }}"
+          tag_name: "axionos-${{ github.run_id }}"
+          name: "فایل AxionOS - ${{ github.run_id }}"
           body: |
-            قطعات فایل بزرگ
+            **فایل دانلود شده:**
+            - **لینک اصلی:** `${{ github.event.inputs.file_url }}`
+            - **تاریخ:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
             
-            لینک اصلی: ${{ github.event.inputs.file_url }}
-            
-            نحوه ترکیب: همه قطعات را دانلود کرده و در ترمینال بنویسید:
+            **نحوه ترکیب قطعات:**
+            ```bash
             cat part_* > فایل_نهایی.zip
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: آپلود همه قطعه‌ها به Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: "upload-${{ github.run_id }}"
-          files: part_*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
