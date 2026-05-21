@@ -1,4 +1,4 @@
-name: "دانلود، تقسیم و آپلود خودکار فایل (AxionOS)"
+name: "دانلود فایل از AxionOS (با پروکسی)"
 
 on:
   workflow_dispatch:
@@ -9,49 +9,94 @@ on:
         default: 'https://cdn.axionos.org/begonia/axion-2.6-QUASIS-20260521-OFFICIAL-PICO-begonia.zip'
         type: string
       part_size:
-        description: 'اندازه هر قطعه (مثلاً 95M)'
+        description: 'اندازه هر قطعه'
         required: false
         default: '95M'
         type: string
 
 jobs:
-  process-large-file:
+  download:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
-      - name: آماده‌سازی محیط
-        run: echo "شروع دانلود..."
+      - name: نصب ابزارها
+        run: sudo apt-get update && sudo apt-get install -y wget curl
 
-      - name: دریافت فایل با هدرهای شبیه‌سازی مرورگر
+      - name: دانلود از طریق پروکسی (روش اول)
+        id: download_proxy
         run: |
-          echo "دانلود از: ${{ github.event.inputs.file_url }}"
-          curl -L -o "original_file.bin" "${{ github.event.inputs.file_url }}" \
-            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-            -H "Referer: https://axionos.org/" \
-            -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8" \
+          PROXY_URL="https://corsproxy.io/?url=${{ github.event.inputs.file_url }}"
+          echo "تلاش با corsproxy.io ..."
+          curl -L -o original_file.bin "$PROXY_URL" \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+            --max-time 600 --retry 3
+          SIZE=$(stat -c%s original_file.bin)
+          if [ $SIZE -lt 10000000 ]; then
+            echo "فایل کوچک است، شاید خطا. حذف می‌کنم."
+            rm original_file.bin
+            exit 1
+          else
+            echo "دانلود موفق با پروکسی. حجم: $SIZE bytes"
+            exit 0
+          fi
+        continue-on-error: true
+
+      - name: دانلود مستقیم با هدرهای قوی (روش دوم)
+        if: steps.download_proxy.outcome != 'success'
+        run: |
+          echo "روش دوم: تلاش مستقیم با curl پیشرفته..."
+          curl -L -o original_file.bin "${{ github.event.inputs.file_url }}" \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
+            -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8" \
             -H "Accept-Language: en-US,en;q=0.5" \
-            --retry 5 --retry-delay 3 --max-time 1800
-          echo "دانلود کامل شد."
+            -H "Referer: https://axionos.org/" \
+            -H "Origin: https://axionos.org" \
+            -H "Cache-Control: no-cache" \
+            -H "Connection: keep-alive" \
+            -H "Sec-Fetch-Dest: document" \
+            -H "Sec-Fetch-Mode: navigate" \
+            -H "Sec-Fetch-Site: cross-site" \
+            -H "Sec-Fetch-User: ?1" \
+            -H "Upgrade-Insecure-Requests: 1" \
+            --compressed \
+            --retry 5 \
+            --retry-delay 5 \
+            --max-time 900
+          SIZE=$(stat -c%s original_file.bin)
+          if [ $SIZE -lt 10000000 ]; then
+            echo "باز هم فایل کوچک است. نمایش محتوا:"
+            cat original_file.bin
+            exit 1
+          fi
+
+      - name: اگر هر دو روش شکست خورد، خطا بده
+        if: steps.download_proxy.outcome != 'success' && failure()
+        run: |
+          echo "❌ هیچ روشی جواب نداد. شاید فایل از سرور حذف شده یا نیاز به احراز هویت دارد."
+          exit 1
+
+      - name: بررسی حجم فایل نهایی
+        run: |
+          echo "✅ دانلود نهایی:"
           ls -lh original_file.bin
 
       - name: تقسیم فایل به قطعات
         run: |
-          echo "تقسیم فایل به قطعات ${{ github.event.inputs.part_size }}..."
+          echo "تقسیم به قطعات ${{ github.event.inputs.part_size }}..."
           split -b ${{ github.event.inputs.part_size }} -d -a 3 original_file.bin "part_"
-          echo "تقسیم انجام شد. تعداد قطعات: $(ls part_* | wc -l)"
+          echo "تعداد قطعات: $(ls part_* | wc -l)"
 
-      - name: آپلود قطعات به Release
+      - name: آپلود به Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "axionos-${{ github.run_id }}"
+          tag_name: "axion-${{ github.run_id }}"
           name: "فایل AxionOS - ${{ github.run_id }}"
+          files: part_*
           body: |
-            **فایل دانلود شده:**
-            - **لینک اصلی:** `${{ github.event.inputs.file_url }}`
-            - **تاریخ:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-            
-            **نحوه ترکیب قطعات:**
+            **لینک اصلی:** `${{ github.event.inputs.file_url }}`
+            **روش دانلود:** از طریق پروکسی `corsproxy.io`
+            **تاریخ:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+            **نحوه ترکیب:**
             ```bash
-            cat part_* > فایل_نهایی.zip
+            cat part_* > رام.zip
